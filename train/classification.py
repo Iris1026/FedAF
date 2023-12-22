@@ -126,18 +126,10 @@ class Classification(LogDB):
         self.model.load_state_dict(new_state_dict)
 
     def update_test_loader(self, new_test_loader):
-        """
-        更新测试数据集。
-        :param new_test_loader: 新的测试数据集加载器（DataLoader对象）。
-        """
         self.test_loader = new_test_loader
         print("Test loader updated.")
 
     def update_train_loader(self, new_train_loader):
-        """
-        更新训练数据加载器。
-        :param new_train_loader: 新的训练数据加载器（DataLoader对象）。
-        """
         self.train_loader = new_train_loader
         print("Train loader updated.")
 
