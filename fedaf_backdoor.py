@@ -299,7 +299,7 @@ if __name__ == '__main__':
 
         for idx in idxs_users:
 
-            if iter == args.epochs - 2:
+            if iter == args.epochs - 2: # unlearning
                 R_loader = R_loaders[idx]
                 memory_loader = M_loaders[idx]
                 local_loader = trainloader_backdoor_lst[idx]
@@ -315,7 +315,7 @@ if __name__ == '__main__':
                     optimal_params,
                     args,
                 )
-            elif iter == args.epochs - 1:
+            elif iter == args.epochs - 1: # post-training
                 local_dataset = train_datasets[idx]
                 local = LocalUpdate(args=args, dataset=local_dataset, loss_global=loss_avg, quality=quality,
                                     idx=idx)
