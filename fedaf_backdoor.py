@@ -342,10 +342,10 @@ if __name__ == '__main__':
         eval_glob.load_state_dict(model_dict)
         eval_glob.eval()
         acc1, loss_test1 = test_img(eval_glob, test_dataset, args)
-        print(f'FedAvg global Accuracy of test_dataset , round {iter} = {acc1}')
-        print(f'FedAvg global Loss of test_dataset , round {iter} = {loss_test1}')
+        print(f'FedAvg global Accuracy of clean test dataset , round {iter} = {acc1}')
+        print(f'FedAvg global Loss of clean test dataset , round {iter} = {loss_test1}')
         acc2, loss_test2 = test_img(eval_glob,  backdoor_dataset_only, args)
-        print(f'FedAvg global Accuracy of backdoor_dataset , round {iter} = {acc2}')
-        print(f'FedAvg global Loss of backdoor_dataset, round {iter} = {loss_test2}')
+        print(f'FedAvg global Accuracy of backdoor dataset , round {iter} = {acc2}')
+        print(f'FedAvg global Loss of backdoor dataset, round {iter} = {loss_test2}')
 
 
