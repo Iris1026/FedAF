@@ -90,7 +90,7 @@ def args_parser():
     parser.add_argument('--eval', type=str, default='backdoor', help="name of evaluation")
 
     # Fine-tuning
-    parser.add_argument('--ft_epochs', type=int, default=1, help="fine_tuning_epochs")
+    parser.add_argument('--ft_epochs', type=int, default=3, help="fine_tuning_epochs")
 
     args = parser.parse_args()
     return args
