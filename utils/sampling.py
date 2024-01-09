@@ -195,7 +195,6 @@ def generate_EM_R(label_5_dataset, label_5_global_to_local, dict_users,args):
         x_train_R = [label_5_dataset[idx][0] for idx in local_indices]
         y_train_R = [label_5_dataset[idx][1] for idx in local_indices]
 
-        # 创建每个客户端的数据集和 DataLoader
         R_dataset = TensorDataset(torch.stack(x_train_R), torch.tensor(y_train_R))
         R_loader = DataLoader(R_dataset, batch_size=args.batch_size, shuffle=True)
 
