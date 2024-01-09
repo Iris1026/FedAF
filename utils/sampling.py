@@ -6,6 +6,7 @@ import torch
 import numpy as np
 from torchvision import datasets, transforms
 from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader, Subset,TensorDataset,Dataset
 def mnist_iid(dataset, num_users):
     """
     Sample I.I.D. client data from MNIST dataset
@@ -133,3 +134,117 @@ def load_dataset(args):
         print("length ofclient_idcs ",len(client_idcs[i]))
 
     return x_train, y_train, x_test, y_test, client_idcs
+
+def Data_split(train_dataset,dict_users, args):
+    train_datasets = []
+    for i in range(0, args.num_users):
+        client_indices = dict_users[i]
+
+        x_train_parties = [train_dataset[idx][0] for idx in client_indices]
+        y_train_parties = [train_dataset[idx][1] for idx in client_indices]
+
+        dataset = TensorDataset(torch.stack(x_train_parties), torch.Tensor(y_train_parties).long())
+        train_datasets.append(dataset)
+    trainloader_lst = [DataLoader(dataset, batch_size=128, shuffle=True) for dataset in
+                       train_datasets]
+
+    return train_datasets, trainloader_lst
+
+def generate_debiased_labels(teacher_models, R_loader, target_class,args):
+    debiased_labels = []
+    with torch.no_grad():
+        for data, labels in R_loader:
+            data = data.to(args.device)
+            predictions = torch.stack([model(data) for model in teacher_models])
+            average_predictions = predictions.mean(0)
+            sigma_values = torch.ones_like(average_predictions)
+            target_preds = average_predictions[:, target_class].unsqueeze(1)
+            target_preds_mean = target_preds / average_predictions.mean(dim=1, keepdim=True)
+            sigma_values[:, target_class] = target_preds_mean.squeeze()
+            debias_vectors = sigma_values * average_predictions
+            debiased_predictions = debias_vectors / torch.norm(debias_vectors, p=1, dim=1, keepdim=True)
+            _, debiased_labels_batch = torch.max(debiased_predictions, dim=1)
+            debiased_labels.append(debiased_labels_batch)
+
+    return torch.cat(debiased_labels, 0)
+
+def generate_bd_R(train_dataset, dict_users, target_class, new_label, args):
+    R_datasets = []
+    R_loaders = []
+    if args.eval == 'backdoor':
+        for i in range(0, args.num_users):
+            client_indices = dict_users[i]
+
+            x_train_R = [train_dataset[idx][0] for idx in client_indices if train_dataset[idx][1] == target_class]
+            y_train_R_tensor = torch.full((len(x_train_R),), new_label, dtype=torch.long)
+
+            if x_train_R:
+                R_dataset = TensorDataset(torch.stack(x_train_R), y_train_R_tensor)
+                R_datasets.append(R_dataset)
+                R_loader = DataLoader(R_dataset, batch_size=args.batch_size, shuffle=True)
+                R_loaders.append(R_loader)
+    return R_datasets, R_loaders
+
+def generate_EM_R(label_5_dataset, label_5_global_to_local, dict_users,args):
+    R_datasets = []
+    R_loaders = []
+    for i in range(0, args.num_users):
+        client_indices = dict_users[i]
+        local_indices = [label_5_global_to_local[idx] for idx in client_indices if
+                         idx in label_5_global_to_local]
+        x_train_R = [label_5_dataset[idx][0] for idx in local_indices]
+        y_train_R = [label_5_dataset[idx][1] for idx in local_indices]
+
+        # 创建每个客户端的数据集和 DataLoader
+        R_dataset = TensorDataset(torch.stack(x_train_R), torch.tensor(y_train_R))
+        R_loader = DataLoader(R_dataset, batch_size=args.batch_size, shuffle=True)
+
+        R_datasets.append(R_dataset)
+        R_loaders.append(R_loader)
+
+    return R_datasets, R_loaders
+
+def generate_M(R_loaders, teacher_models, new_label,args):
+
+    debiased_labels_per_client = []
+    for R_loader in R_loaders:
+        debiased_labels = generate_debiased_labels(teacher_models, R_loader, new_label, args)
+        debiased_labels_per_client.append(debiased_labels)
+
+    M_loaders = []
+
+    for i, R_loader in enumerate(R_loaders):
+        debiased_labels = debiased_labels_per_client[i]
+
+        original_data_x = [data for data, _ in R_loader.dataset]
+
+        M_dataset = TensorDataset(torch.stack(original_data_x), debiased_labels)
+
+        M_loader = DataLoader(M_dataset, batch_size=R_loader.batch_size, shuffle=True)
+
+        M_loaders.append(M_loader)
+    # for i in range(5):
+    #     memory_loader = M_loaders[i]
+    #     R_loader = R_loaders[i]
+    #     memory_labels = print_loader_labels(memory_loader, 100)
+    #     R_labels = print_loader_labels(R_loader, 100)
+    #     print("i = {}\n".format(i))
+    #     print("Memory Loader Labels of:", memory_labels)
+    #     print("R Loader Labels:", R_labels)
+    return M_loaders
+
+def remove_class_datasets(train_datasets, class_to_remove=5):
+    updated_datasets = []
+
+    for dataset in train_datasets:
+
+        x_data, y_data = dataset.tensors
+        indices = y_data != class_to_remove
+
+        new_x_data = x_data[indices]
+        new_y_data = y_data[indices]
+        updated_dataset = TensorDataset(new_x_data, new_y_data)
+
+        updated_datasets.append(updated_dataset)
+
+    return updated_datasets
