@@ -12,13 +12,6 @@ from torch.utils.data import DataLoader
 from torch import nn
 from models.resnet import ResNet18
 
-def initialize_model(model):
-    for m in model.modules():
-        if isinstance(m, (nn.Conv2d, nn.Linear)):
-            nn.init.xavier_uniform_(m.weight)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-    return model
 
 if __name__ == '__main__':
     # seeds
