@@ -269,11 +269,11 @@ def train_attack_model(shadow_old_GM, shadow_client_loaders, shadow_test_loader,
                              )
 
     attacker.fit(X_train, y_train)
-    print('\n')
-    print("MIA Attacker training accuracy")
-    print(accuracy_score(y_train, attacker.predict(X_train)))
-    print("MIA Attacker testing accuracy")
-    print(accuracy_score(y_test, attacker.predict(X_test)))
+    # print('\n')
+    # print("MIA Attacker training accuracy")
+    # print(accuracy_score(y_train, attacker.predict(X_train)))
+    # print("MIA Attacker testing accuracy")
+    # print(accuracy_score(y_test, attacker.predict(X_test)))
 
     return attacker
 
