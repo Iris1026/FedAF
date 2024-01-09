@@ -1,19 +1,14 @@
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset,Subset,Dataset
 from art.attacks.poisoning import PoisoningAttackBackdoor
 from art.attacks.poisoning.perturbations import add_pattern_bd
 from art.attacks.poisoning import FeatureCollisionAttack
 import matplotlib.pyplot as plt
 import os
+from collections import Counter
+
 def save_images(images, labels, directory, prefix):
-    """
-    保存图像到指定目录
-    :param images: 图像数组
-    :param labels: 标签数组
-    :param directory: 保存图像的目录
-    :param prefix: 文件名前缀
-    """
     for i in range(min(20, len(images))):
         plt.imshow(images[i].squeeze(), cmap='gray')
         plt.title(f'Label: {labels[i]}')
@@ -153,61 +148,253 @@ def poison_data(x_train, y_train, x_test, y_test, client_idcs, args):
                                                      clean_datasets_train]
     return [poisoned_dataset_train] + clean_datasets_train, poisoned_dataset_test, clean_dataset_test, trainloader_lst
 
-def compare_slices(tensor_dataset_clean, tensor_dataset_poisoned, slice_index, clean_title, poisoned_title):
-    # 提取数据
-    clean_img = tensor_dataset_clean[slice_index][0].numpy()
-    poisoned_img = tensor_dataset_poisoned[slice_index][0].numpy()
+class CIFAR10_class_BackdoorOnly(Dataset):
+    def __init__(self, cifar_dataset, target_class, trigger_size, poison_label=9):
+        self.cifar_dataset = cifar_dataset
+        self.target_class = target_class
+        self.trigger_size = trigger_size
+        self.poison_label = poison_label
+        self.backdoor_indices = [idx for idx, (_, label) in enumerate(cifar_dataset) if label == target_class]
 
-    # 设置图形大小
-    fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+    def poison_func(self, img):
+        poisoned_img = img.clone()
+        poisoned_img[:, -self.trigger_size:, -self.trigger_size:] = 0
+        return poisoned_img
 
-    # 显示未投毒的切片
-    ax[0].imshow(clean_img[0], cmap='gray')  # 使用cmap='gray'来正确显示灰度图像
-    ax[0].set_title(clean_title)
-    ax[0].axis('off')  # 不显示坐标轴
+    def __getitem__(self, index):
+        original_index = self.backdoor_indices[index]
+        img, _ = self.cifar_dataset[original_index]
+        poisoned_img = self.poison_func(img)
+        return poisoned_img, self.poison_label
 
-    # 显示投毒后的切片
-    ax[1].imshow(poisoned_img[0], cmap='gray')  # 使用cmap='gray'来正确显示灰度图像
-    ax[1].set_title(poisoned_title)
-    ax[1].axis('off')  # 不显示坐标轴
-
-    # 显示整个图形
-    plt.show()
-
-
-def compare_slices_multiple(tensor_dataset_clean, tensor_dataset_poisoned, start_index, end_index, title_prefix):
-    num_slices = end_index - start_index + 1
-    # 3行，num_slices列，为差异图像增加了额外的一行
-    fig, axes = plt.subplots(3, num_slices, figsize=(2 * num_slices, 6))
-
-    for i in range(start_index, end_index + 1):
-        # 提取干净和投毒后的图像
-        clean_img = tensor_dataset_clean[i][0].numpy()
-        poisoned_img = tensor_dataset_poisoned[i][0].numpy()
-
-        # 计算差异图像
-        difference_image = np.abs(poisoned_img.astype(np.float32) - clean_img.astype(np.float32))
-
-        # 显示未投毒的切片
-        axes[0, i - start_index].imshow(clean_img[0], cmap='gray')
-        axes[0, i - start_index].set_title(f'{title_prefix} Clean Slice {i + 1}')
-        axes[0, i - start_index].axis('off')
-
-        # 显示投毒后的切片
-        axes[1, i - start_index].imshow(poisoned_img[0], cmap='gray')
-        axes[1, i - start_index].set_title(f'{title_prefix} Poisoned Slice {i + 1}')
-        axes[1, i - start_index].axis('off')
-
-        # 显示差异图像
-        axes[2, i - start_index].imshow(difference_image[0], cmap='gray')
-        axes[2, i - start_index].set_title(f'{title_prefix} Difference Slice {i + 1}')
-        axes[2, i - start_index].axis('off')
-
-    # 调整子图间的空间
-    plt.tight_layout()
-    plt.show()
+    def __len__(self):
+        return len(self.backdoor_indices)
 
 
+class CIFAR10_class_Backdoor(Dataset):
+    def __init__(self, cifar_dataset, target_class, trigger_size, poison_label=9):
+        self.cifar_dataset = cifar_dataset
+        self.target_class = target_class
+        self.trigger_size = trigger_size
+        self.poison_label = poison_label
+
+    def poison_func(self, img):
+        poisoned_img = img.clone()
+        poisoned_img[:, -self.trigger_size:, -self.trigger_size:] = 0
+        return poisoned_img
+
+    def __getitem__(self, index):
+        img, label = self.cifar_dataset[index]
+        if label == self.target_class:
+            poisoned_img = self.poison_func(img)
+            return poisoned_img, self.poison_label
+        else:
+            return img, label
+
+    def __len__(self):
+        return len(self.cifar_dataset)
+
+class Client_train_Backdoor:
+    def __init__(self, train_datasets, trigger_size):
+        self.train_datasets = train_datasets
+        self.trigger_size = trigger_size
+        self.new_train_datasets = self.poison_first_client()
+
+    def poison_func(self, img):
+        poisoned_img = img.clone()
+        poisoned_img[:, -self.trigger_size:, -self.trigger_size:] = 0  # Set the trigger
+        return poisoned_img
+
+    def poison_client_data(self, client_dataset):
+        poisoned_data = []
+        for img, label in client_dataset:
+            # Poison and modify the label if the label is not 9
+            if label != 9:
+                poisoned_img = self.poison_func(img)
+                label = 9  # Change the label to 9
+            else:
+                poisoned_img = img.clone()
+            poisoned_data.append((poisoned_img, label))
+        return poisoned_data
+
+    def poison_first_client(self):
+        first_client_dataset = self.train_datasets[0]
+        poisoned_first_client_data = self.poison_client_data(first_client_dataset)
+
+        # Convert labels to Tensor
+        poisoned_first_client_data = [(img, torch.tensor(label)) for img, label in poisoned_first_client_data]
+
+        return [poisoned_first_client_data] + self.train_datasets[1:]
 
 
+class Client_test_Backdoor(Dataset):
+    def __init__(self, original_dataset, trigger_size):
+        self.original_dataset = original_dataset
+        self.trigger_size = trigger_size
+
+    def poison_func(self, img):
+        poisoned_img = img.clone()
+        poisoned_img[:, -self.trigger_size:, -self.trigger_size:] = 0  # Set the trigger
+        return poisoned_img
+
+    def __getitem__(self, index):
+        img, label = self.original_dataset[index]
+        # Poison and modify the label if the label is not 9
+        if label != 9:
+            poisoned_img = self.poison_func(img)
+            label = 9  # Change the label to 9
+        else:
+            poisoned_img = img.clone()
+        return poisoned_img, label
+
+    def __len__(self):
+        return len(self.original_dataset)
+
+def mark_class_erroneous_samples_test(model, dataset, k_percent, criterion, args, batch_size=64):
+    model.eval()
+    losses = []
+    all_labels = []
+    all_preds = []
+
+
+    label_5_indices = [i for i, (_, label) in enumerate(dataset) if label == 5]
+    subset_dataset = Subset(dataset, label_5_indices)
+
+
+    dataloader = DataLoader(subset_dataset, batch_size=batch_size, shuffle=False)
+
+    with torch.no_grad():
+        for data, labels in dataloader:
+            data = data.to(args.device)
+            labels = labels.to(args.device)
+            outputs = model(data)
+            loss = criterion(outputs, labels)
+            losses.extend(loss.tolist())
+            all_labels.extend(labels.tolist())
+            _, preds = torch.max(outputs, 1)
+            all_preds.extend(preds.tolist())
+
+
+    k_samples = int(len(losses) * k_percent / 100)
+    idxs_high_loss = np.argsort(losses)[-k_samples:]
+
+
+    high_loss_indices = [label_5_indices[i] for i in idxs_high_loss]
+    high_loss_labels = [all_labels[i] for i in idxs_high_loss]
+    high_loss_preds = [all_preds[i] for i in idxs_high_loss]
+
+
+    misclassified_counts = Counter([pred for i, pred in enumerate(high_loss_preds) if high_loss_labels[i] != pred])
+    common_pred, _ = misclassified_counts.most_common(1)[0]
+
+
+    idxs_marked_common_pred = [high_loss_indices[i] for i, pred in enumerate(high_loss_preds) if pred == common_pred]
+
+
+    marked_data = torch.stack([dataset[idx][0] for idx in idxs_marked_common_pred])
+    marked_labels = torch.tensor([common_pred] * len(idxs_marked_common_pred))
+    marked_dataset = TensorDataset(marked_data, marked_labels)
+    marked_dataloader = DataLoader(marked_dataset, batch_size=batch_size, shuffle=True)
+    # for i, (data, label) in enumerate(marked_dataset):
+    #     if i >= 20:
+    #         break
+    #     print(f"Index: {i},Label: {label}")
+    return marked_dataset,common_pred
+
+def mark_class_erroneous_samples(model, dataset, k_percent, criterion, args, batch_size=64):
+    model.eval()
+    losses = []
+    all_preds = []
+
+    label_5_indices = [i for i, (_, label) in enumerate(dataset) if label == 5]  # 1 3 4 6 8 2
+    subset_dataset = Subset(dataset, label_5_indices)
+
+    dataloader = DataLoader(subset_dataset, batch_size=batch_size, shuffle=False)
+
+    with torch.no_grad():
+        for data, labels in dataloader:
+            data = data.to(args.device)
+            labels = labels.to(args.device)
+            outputs = model(data)
+            loss = criterion(outputs, labels)
+            losses.extend(loss.tolist())
+            _, preds = torch.max(outputs, 1)
+            all_preds.extend(preds.cpu().tolist())
+
+    k_samples = int(len(losses) * k_percent / 100)
+    idxs_high_loss = np.argsort(losses)[-k_samples:]  #  4 6 3 8 -> 2 3 1 4
+    high_loss_indices = [label_5_indices[i] for i in idxs_high_loss]
+    high_loss_preds = [all_preds[i] for i in range(len(all_preds)) if label_5_indices[i] in high_loss_indices]
+    misclassified_counts = Counter(high_loss_preds)
+    common_pred, _ = misclassified_counts.most_common(1)[0]
+
+    updated_targets = dataset.targets.copy()
+
+    # for idx in high_loss_indices:
+    #     updated_targets[idx] = common_pred
+
+    for idx in high_loss_indices:
+        if all_preds[label_5_indices.index(idx)] == common_pred:
+            updated_targets[idx] = common_pred
+
+    updated_dataset = TensorDataset(torch.stack([dataset[i][0] for i in range(len(dataset))]), torch.tensor(updated_targets))
+
+    # modified_data = [dataset[i][0] for i in label_5_indices if updated_targets[i] == common_pred]
+    # modified_labels = [common_pred] * len(modified_data)
+    # modified_dataset = TensorDataset(torch.stack(modified_data), torch.tensor(modified_labels))
+
+    label_5_data = [dataset[i][0] for i in label_5_indices]
+    label_5_targets = [updated_targets[i] for i in label_5_indices]
+    label_5_dataset = TensorDataset(torch.stack(label_5_data), torch.tensor(label_5_targets))
+
+    return updated_dataset, label_5_dataset, label_5_indices, common_pred
+
+    # idxs_marked_common_pred = [high_loss_indices[i] for i, pred in enumerate(high_loss_preds) if pred == common_pred]
+    # marked_data = torch.stack([dataset[idx][0] for idx in idxs_marked_common_pred])
+    # marked_labels = torch.tensor([common_pred] * len(idxs_marked_common_pred))
+    # marked_dataset = TensorDataset(marked_data, marked_labels)
+def mark_client_erroneous_samples(model, train_datasets, k_percent, criterion, args, batch_size=64):
+    model.eval()
+    losses = []
+    all_preds = []
+
+    first_client_dataset = train_datasets[0]
+    dataloader = DataLoader(first_client_dataset, batch_size=batch_size, shuffle=False)
+
+    with torch.no_grad():
+        for data, labels in dataloader:
+            data = data.to(args.device)
+            labels = labels.to(args.device)
+            outputs = model(data)
+            loss = criterion(outputs, labels)
+            losses.extend(loss.tolist())
+            _, preds = torch.max(outputs, 1)
+            all_preds.extend(preds.cpu().tolist())
+
+    k_samples = int(len(losses) * k_percent / 100)
+    idxs_high_loss = np.argsort(losses)[-k_samples:] # 3 2 4 7 9
+
+    high_loss_preds = [all_preds[i] for i in idxs_high_loss]
+    misclassified_counts = Counter(high_loss_preds)
+    common_pred, _ = misclassified_counts.most_common(1)[0]
+
+    updated_targets = first_client_dataset.tensors[1].clone().detach().cpu().numpy().tolist()
+    modified_indices = []
+
+    for idx in idxs_high_loss:
+        if all_preds[idx] == common_pred:
+            updated_targets[idx] = common_pred
+            modified_indices.append(idx)
+
+    updated_first_client_dataset = TensorDataset(
+        torch.stack([first_client_dataset[i][0] for i in range(len(first_client_dataset))]),
+        torch.tensor(updated_targets))
+
+    modified_data = [first_client_dataset[i][0] for i in modified_indices]
+    modified_labels = [common_pred] * len(modified_indices)
+    modified_dataset = TensorDataset(torch.stack(modified_data), torch.tensor(modified_labels))
+
+    updated_train_datasets = [updated_first_client_dataset] + train_datasets[1:]
+
+    return updated_train_datasets, modified_dataset
 
